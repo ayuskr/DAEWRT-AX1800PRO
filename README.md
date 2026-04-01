@@ -1,7 +1,7 @@
-# OpenWRT-CI 
+# DAEWRT-AX1800PRO
 京东云亚瑟AX1800pro专属固件包  
   
-  （部分代码来自Davidtall、VIKINGYFY）
+  固件集成增强版geoip.dat、geosite.dat,开箱即用，正确配置Dae不会报错
   
   适度精简，确保最大性能发挥，开启内核eBPF，Dae吃鹅优选，建议硬改1GB内存的使用。
   
