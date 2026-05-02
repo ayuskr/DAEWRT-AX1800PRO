@@ -43,6 +43,12 @@ on:
       WRT_TEST:
         required: false
         type: string
+      CI_NAME:
+        required: false
+        type: string
+      WRT_ARCH:
+        required: false
+        type: string
 
 env:
   GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
