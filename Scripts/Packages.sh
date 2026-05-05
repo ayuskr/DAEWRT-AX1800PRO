@@ -126,8 +126,9 @@ UPDATE_VERSION() {
 # sed -i 's/+xray-core//' luci-app-passwall2/Makefile
 
 # #删除官方的默认插件
-rm -rf ../feeds/luci/applications/luci-app-{passwall*,mosdns,dockerman,dae*,bypass*}
-rm -rf ../feeds/packages/net/{dae*}
+#rm -rf ../feeds/luci/applications/luci-app-{passwall*,mosdns,dockerman,dae*,bypass*}
+#rm -rf ../feeds/packages/net/{dae*}
+rm -rf ../feeds/luci/applications/luci-app-{passwall*,dockerman,bypass*}
 #rm -rf ../feeds/packages/net/{v2ray-geodata,dae*}
 
 # #更新golang为最新版
@@ -148,3 +149,7 @@ rm -rf ../feeds/packages/net/{dae*}
 # #修复daed/Makefile
 # # rm -rf luci-app-daed/daed/Makefile && cp -r $GITHUB_WORKSPACE/patches/daed/Makefile luci-app-daed/daed/
 # # cat luci-app-daed/daed/Makefile
+# ===== 必须加，不然插件不会进固件 =====
+git clone --depth=1 https://github.com/sbwml/luci-app-mosdns package/mosdns
+git clone --depth=1 https://github.com/gdy666/luci-app-lucky package/lucky
+git clone --depth=1 https://github.com/lwb1978/openwrt-gecoosac package/gecoosac
