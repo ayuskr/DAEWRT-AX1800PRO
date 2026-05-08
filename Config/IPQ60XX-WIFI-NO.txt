@@ -55,9 +55,9 @@ CONFIG_PACKAGE_kmod-tun=y
 CONFIG_PACKAGE_kmod-tcp-bbr=y
 
 # ===== dae / daed =====
-CONFIG_PACKAGE_luci-app-dae=y
+CONFIG_PACKAGE_luci-app-dae=n
 CONFIG_PACKAGE_luci-app-daed=y
-CONFIG_PACKAGE_dae=y
+CONFIG_PACKAGE_dae=n
 
 # ===== lucky / mosdns =====
 CONFIG_PACKAGE_luci-app-lucky=y
