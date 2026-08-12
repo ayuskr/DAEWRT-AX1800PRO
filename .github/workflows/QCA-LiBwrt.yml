@@ -26,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        CONFIG: [IPQ60XX-NOWIFI]
+        CONFIG: [IPQ60XX-WIFI]
         SOURCE: [LiBwrt/openwrt-6.x]
         BRANCH: [main-nss]
 
