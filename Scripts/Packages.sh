@@ -1,6 +1,5 @@
 #!/bin/bash
 
-# 安装和更新软件包
 UPDATE_PACKAGE() {
 	local PKG_NAME="$1"
 	local PKG_REPO="$2"
@@ -13,6 +12,7 @@ UPDATE_PACKAGE() {
 
 	for NAME in "${PKG_LIST[@]}"; do
 		echo "Search directory: $NAME"
+
 		local FOUND_DIRS
 		FOUND_DIRS=$(find ../feeds/luci/ ../feeds/packages/ -maxdepth 3 -type d -iname "*$NAME*" 2>/dev/null)
 
@@ -36,28 +36,45 @@ UPDATE_PACKAGE() {
 	fi
 }
 
-# 删除与 daed、主题冲突的 feeds 原始软件包。
+# Remove source packages that conflict with the custom daed package.
 rm -rf ../feeds/luci/applications/luci-app-{passwall*,mosdns,dockerman,dae*,bypass*}
-rm -rf ../feeds/luci/themes/luci-theme-{argon,aurora,glass}
 rm -rf ../feeds/packages/net/dae*
+rm -rf ../feeds/luci/themes/luci-theme-{argon,aurora,glass}
 
-# 保留 Daed LuCI 管理界面。
+# Daed LuCI application and daemon package.
 UPDATE_PACKAGE "luci-app-daed" "QiuSimons/luci-app-daed" "kix"
 
-# 添加 Lucky。
+# The upstream dae-wing source currently lacks embeddable files under
+# webrender/web. Do not build its unused embedded Web frontend.
+DAED_MAKEFILE="./luci-app-daed/daed/Makefile"
+
+if [ -f "$DAED_MAKEFILE" ]; then
+	sed -i \
+		-e 's/embedallowed,trace/trace/g' \
+		-e 's/trace,embedallowed/trace/g' \
+		-e 's/embedallowed//g' \
+		"$DAED_MAKEFILE"
+
+	echo "Disabled broken dae-wing embedded Web frontend build tag."
+else
+	echo "ERROR: daed Makefile not found: $DAED_MAKEFILE"
+	exit 1
+fi
+
+# Lucky LuCI application.
 UPDATE_PACKAGE "luci-app-lucky" "gdy666/luci-app-lucky" "main" "" "lucky"
 
-# 添加 Gecoosac。
+# Gecoosac LuCI application.
 UPDATE_PACKAGE "luci-app-gecoosac" "lwb1978/openwrt-gecoosac" "main" "" "gecoosac"
 
-# 添加 Glass 主题。
+# Glass LuCI theme.
 UPDATE_PACKAGE "luci-theme-glass" "rchen14b/luci-theme-glass" "main" "" "glass"
 
-# 更新软件包版本。
 UPDATE_VERSION() {
 	local PKG_NAME="$1"
 	local PKG_MARK="${2:-false}"
 	local PKG_FILES
+
 	PKG_FILES=$(find ./ ../feeds/packages/ -maxdepth 3 -type f -wholename "*/$PKG_NAME/Makefile")
 
 	if [ -z "$PKG_FILES" ]; then
