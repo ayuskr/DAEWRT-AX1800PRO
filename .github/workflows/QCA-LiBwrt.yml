@@ -33,8 +33,8 @@ jobs:
       #max-parallel: 3
       matrix:
         #CONFIG: [IPQ807X-NOWIFI, IPQ807X-WIFI,IPQ60XX-NOWIFI, IPQ60XX-WIFI]
-        CONFIG: [IPQ60XX-WIFI]
-        #CONFIG: [ZNM2-NOWIFI-NOUSB.txt]
+        #CONFIG: [IPQ60XX-WIFI]
+        CONFIG: [IPQ60XX-NOWIFI]
 #LiBwrt        
         SOURCE: [LiBwrt/openwrt-6.x]
         BRANCH: [main-nss]
