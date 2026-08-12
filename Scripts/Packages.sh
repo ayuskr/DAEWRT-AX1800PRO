@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# 安装和更新软件包
 UPDATE_PACKAGE() {
 	local PKG_NAME="$1"
 	local PKG_REPO="$2"
@@ -35,24 +36,24 @@ UPDATE_PACKAGE() {
 	fi
 }
 
-# 移除源码及 feeds 中的冲突插件
+# 删除与 daed、主题冲突的 feeds 原始软件包。
 rm -rf ../feeds/luci/applications/luci-app-{passwall*,mosdns,dockerman,dae*,bypass*}
-rm -rf ../feeds/packages/net/{dae*,lucky,microsocks}
 rm -rf ../feeds/luci/themes/luci-theme-{argon,aurora,glass}
+rm -rf ../feeds/packages/net/dae*
 
-# Daed LuCI 管理界面
+# 保留 Daed LuCI 管理界面。
 UPDATE_PACKAGE "luci-app-daed" "QiuSimons/luci-app-daed" "kix"
 
-# Lucky
+# 添加 Lucky。
 UPDATE_PACKAGE "luci-app-lucky" "gdy666/luci-app-lucky" "main" "" "lucky"
 
-# Gecoosac
+# 添加 Gecoosac。
 UPDATE_PACKAGE "luci-app-gecoosac" "lwb1978/openwrt-gecoosac" "main" "" "gecoosac"
 
-# Glass主题
-UPDATE_PACKAGE "luci-theme-glass" "Luci-theme/luci-theme-glass" "main" "" "glass"
+# 添加 Glass 主题。
+UPDATE_PACKAGE "luci-theme-glass" "rchen14b/luci-theme-glass" "main" "" "glass"
 
-# 更新软件包版本函数
+# 更新软件包版本。
 UPDATE_VERSION() {
 	local PKG_NAME="$1"
 	local PKG_MARK="${2:-false}"
@@ -85,6 +86,7 @@ UPDATE_VERSION() {
 		OLD_URL=$(grep -Po "PKG_SOURCE_URL:=\K.*" "$PKG_FILE")
 		OLD_FILE=$(grep -Po "PKG_SOURCE:=\K.*" "$PKG_FILE")
 		OLD_HASH=$(grep -Po "PKG_HASH:=\K.*" "$PKG_FILE")
+
 		PKG_URL=$([[ "$OLD_URL" == *"releases"* ]] && echo "${OLD_URL%/}/$OLD_FILE" || echo "${OLD_URL%/}")
 		NEW_VER=$(echo "$PKG_TAG" | sed -E 's/[^0-9]+/\./g; s/^\.|\.$//g')
 		NEW_URL=$(echo "$PKG_URL" | sed "s/\$(PKG_VERSION)/$NEW_VER/g; s/\$(PKG_NAME)/$PKG_NAME/g")
