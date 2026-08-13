@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -e
+
 UPDATE_PACKAGE() {
 	local PKG_NAME="$1"
 	local PKG_REPO="$2"
@@ -9,115 +11,108 @@ UPDATE_PACKAGE() {
 	local REPO_NAME="${PKG_REPO#*/}"
 
 	echo
+	echo "Preparing package: $PKG_NAME"
 
 	for NAME in "${PKG_LIST[@]}"; do
-		echo "Search directory: $NAME"
-
 		local FOUND_DIRS
-		FOUND_DIRS=$(find ../feeds/luci/ ../feeds/packages/ -maxdepth 3 -type d -iname "*$NAME*" 2>/dev/null)
+		FOUND_DIRS=$(find ../feeds/luci/ ../feeds/packages/ \
+			-maxdepth 3 \
+			-type d \
+			-iname "*$NAME*" \
+			2>/dev/null || true)
 
 		if [ -n "$FOUND_DIRS" ]; then
 			while read -r DIR; do
+				[ -n "$DIR" ] || continue
 				rm -rf "$DIR"
 				echo "Delete directory: $DIR"
 			done <<< "$FOUND_DIRS"
-		else
-			echo "Not found directory: $NAME"
 		fi
 	done
 
-	git clone --depth=1 --single-branch --branch "$PKG_BRANCH" "https://github.com/$PKG_REPO.git"
+	rm -rf "$REPO_NAME"
+
+	git clone \
+		--depth=1 \
+		--single-branch \
+		--branch "$PKG_BRANCH" \
+		"https://github.com/$PKG_REPO.git" \
+		"$REPO_NAME"
 
 	if [[ "$PKG_SPECIAL" == "pkg" ]]; then
-		find "./$REPO_NAME"/*/ -maxdepth 3 -type d -iname "*$PKG_NAME*" -prune -exec cp -rf {} ./ \;
-		rm -rf "./$REPO_NAME/"
+		find "./$REPO_NAME"/*/ \
+			-maxdepth 3 \
+			-type d \
+			-iname "*$PKG_NAME*" \
+			-prune \
+			-exec cp -rf {} ./ \;
+
+		rm -rf "$REPO_NAME"
 	elif [[ "$PKG_SPECIAL" == "name" ]]; then
 		mv -f "$REPO_NAME" "$PKG_NAME"
 	fi
 }
 
-# Remove source packages that conflict with the custom daed package.
-rm -rf ../feeds/luci/applications/luci-app-{passwall*,mosdns,dockerman,dae*,bypass*}
+rm -rf ../feeds/luci/applications/luci-app-passwall*
+rm -rf ../feeds/luci/applications/luci-app-mosdns*
+rm -rf ../feeds/luci/applications/luci-app-dockerman*
+rm -rf ../feeds/luci/applications/luci-app-dae*
+rm -rf ../feeds/luci/applications/luci-app-bypass*
 rm -rf ../feeds/packages/net/dae*
-rm -rf ../feeds/luci/themes/luci-theme-{argon,aurora,glass}
 
-# Daed LuCI application and daemon package.
-UPDATE_PACKAGE "luci-app-daed" "QiuSimons/luci-app-daed" "kix"
+rm -rf ../feeds/luci/themes/luci-theme-argon
+rm -rf ../feeds/luci/themes/luci-theme-aurora
+rm -rf ../feeds/luci/themes/luci-theme-glass
 
-# The upstream dae-wing source currently lacks embeddable files under
-# webrender/web. Do not build its unused embedded Web frontend.
+UPDATE_PACKAGE \
+	"luci-app-daed" \
+	"QiuSimons/luci-app-daed" \
+	"kix"
+
 DAED_MAKEFILE="./luci-app-daed/daed/Makefile"
 
-if [ -f "$DAED_MAKEFILE" ]; then
-	sed -i \
-		-e 's/embedallowed,trace/trace/g' \
-		-e 's/trace,embedallowed/trace/g' \
-		-e 's/embedallowed//g' \
-		"$DAED_MAKEFILE"
-
-	echo "Disabled broken dae-wing embedded Web frontend build tag."
-else
-	echo "ERROR: daed Makefile not found: $DAED_MAKEFILE"
+if [ ! -f "$DAED_MAKEFILE" ]; then
+	echo "ERROR: Daed Makefile not found:"
+	echo "$DAED_MAKEFILE"
 	exit 1
 fi
 
-# Lucky LuCI application.
-UPDATE_PACKAGE "luci-app-lucky" "gdy666/luci-app-lucky" "main" "" "lucky"
+if ! grep -q '^GO_PKG_TAGS:=embedallowed,trace$' "$DAED_MAKEFILE"; then
+	echo "ERROR: Daed Makefile does not enable Web UI embedding."
+	echo "Expected: GO_PKG_TAGS:=embedallowed,trace"
+	exit 1
+fi
 
-# Gecoosac LuCI application.
-UPDATE_PACKAGE "luci-app-gecoosac" "lwb1978/openwrt-gecoosac" "main" "" "gecoosac"
+if ! grep -q 'pnpm build --filter daed' "$DAED_MAKEFILE"; then
+	echo "ERROR: Daed frontend build command not found."
+	exit 1
+fi
 
-# Glass LuCI theme.
-UPDATE_PACKAGE "luci-theme-glass" "rchen14b/luci-theme-glass" "main" "" "glass"
+if ! grep -q 'apps/web/dist' "$DAED_MAKEFILE"; then
+	echo "ERROR: Daed frontend output copy command not found."
+	exit 1
+fi
 
-UPDATE_VERSION() {
-	local PKG_NAME="$1"
-	local PKG_MARK="${2:-false}"
-	local PKG_FILES
+echo "Daed Makefile verified."
+echo "Web UI embedding: enabled"
 
-	PKG_FILES=$(find ./ ../feeds/packages/ -maxdepth 3 -type f -wholename "*/$PKG_NAME/Makefile")
+UPDATE_PACKAGE \
+	"luci-app-lucky" \
+	"gdy666/luci-app-lucky" \
+	"main" \
+	"" \
+	"lucky"
 
-	if [ -z "$PKG_FILES" ]; then
-		echo "$PKG_NAME not found!"
-		return
-	fi
+UPDATE_PACKAGE \
+	"luci-app-gecoosac" \
+	"lwb1978/openwrt-gecoosac" \
+	"main" \
+	"" \
+	"gecoosac"
 
-	echo
-	echo "$PKG_NAME version update has started!"
-
-	for PKG_FILE in $PKG_FILES; do
-		local PKG_REPO
-		local PKG_TAG
-		local OLD_VER
-		local OLD_URL
-		local OLD_FILE
-		local OLD_HASH
-		local PKG_URL
-		local NEW_VER
-		local NEW_URL
-		local NEW_HASH
-
-		PKG_REPO=$(grep -Po "PKG_SOURCE_URL:=https://.*github.com/\K[^/]+/[^/]+(?=.*)" "$PKG_FILE")
-		PKG_TAG=$(curl -sL "https://api.github.com/repos/$PKG_REPO/releases" | jq -r "map(select(.prerelease == $PKG_MARK)) | first | .tag_name")
-		OLD_VER=$(grep -Po "PKG_VERSION:=\K.*" "$PKG_FILE")
-		OLD_URL=$(grep -Po "PKG_SOURCE_URL:=\K.*" "$PKG_FILE")
-		OLD_FILE=$(grep -Po "PKG_SOURCE:=\K.*" "$PKG_FILE")
-		OLD_HASH=$(grep -Po "PKG_HASH:=\K.*" "$PKG_FILE")
-
-		PKG_URL=$([[ "$OLD_URL" == *"releases"* ]] && echo "${OLD_URL%/}/$OLD_FILE" || echo "${OLD_URL%/}")
-		NEW_VER=$(echo "$PKG_TAG" | sed -E 's/[^0-9]+/\./g; s/^\.|\.$//g')
-		NEW_URL=$(echo "$PKG_URL" | sed "s/\$(PKG_VERSION)/$NEW_VER/g; s/\$(PKG_NAME)/$PKG_NAME/g")
-		NEW_HASH=$(curl -sL "$NEW_URL" | sha256sum | cut -d ' ' -f 1)
-
-		echo "old version: $OLD_VER $OLD_HASH"
-		echo "new version: $NEW_VER $NEW_HASH"
-
-		if [[ "$NEW_VER" =~ ^[0-9].* ]] && dpkg --compare-versions "$OLD_VER" lt "$NEW_VER"; then
-			sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=$NEW_VER/g" "$PKG_FILE"
-			sed -i "s/PKG_HASH:=.*/PKG_HASH:=$NEW_HASH/g" "$PKG_FILE"
-			echo "$PKG_FILE version has been updated!"
-		else
-			echo "$PKG_FILE version is already the latest!"
-		fi
-	done
-}
+UPDATE_PACKAGE \
+	"luci-theme-glass" \
+	"rchen14b/luci-theme-glass" \
+	"main" \
+	"" \
+	"glass"
