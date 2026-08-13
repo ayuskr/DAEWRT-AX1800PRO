@@ -8,14 +8,15 @@ UPDATE_PACKAGE() {
 	local PKG_NAME="$1"
 	local PKG_REPO="$2"
 	local PKG_BRANCH="$3"
-	local PKG_SPECIAL="$4"
-	local PKG_EXTRA_NAMES="$5"
+	local PKG_SPECIAL="${4:-}"
+	local PKG_EXTRA_NAMES="${5:-}"
 	local PKG_REQUIRED="${6:-true}"
 	local REPO_NAME="${PKG_REPO#*/}"
-	local REPO_URL="https://github.com/$PKG_REPO.git"
+	local REPO_URL="https://github.com/${PKG_REPO}.git"
 	local PKG_LIST=("$PKG_NAME")
 
 	if [ -n "$PKG_EXTRA_NAMES" ]; then
+		local EXTRA_NAMES
 		read -r -a EXTRA_NAMES <<< "$PKG_EXTRA_NAMES"
 		PKG_LIST+=("${EXTRA_NAMES[@]}")
 	fi
@@ -23,12 +24,7 @@ UPDATE_PACKAGE() {
 	echo
 	echo "Preparing package: $PKG_NAME"
 
-	if ! git ls-remote \
-		--exit-code \
-		--heads \
-		"$REPO_URL" \
-		"$PKG_BRANCH" >/dev/null 2>&1; then
-
+	if ! git ls-remote --exit-code --heads "$REPO_URL" "$PKG_BRANCH" >/dev/null 2>&1; then
 		if [ "$PKG_REQUIRED" = "true" ]; then
 			echo "ERROR: Required repository or branch is unavailable."
 			echo "Repository: $REPO_URL"
@@ -127,31 +123,56 @@ PATCH_DAED_MAKEFILE() {
 		exit 1
 	fi
 
+	if ! grep -q 'pnpm install' "$DAED_MAKEFILE"; then
+		echo "ERROR: Daed Makefile does not contain pnpm install."
+		exit 1
+	fi
+
 	if ! grep -q 'pnpm build --filter daed' "$DAED_MAKEFILE"; then
-		echo "ERROR: Expected Daed frontend build command was not found."
+		echo "ERROR: Daed Makefile does not contain the expected frontend build command."
 		echo "Expected: pnpm build --filter daed"
 		exit 1
 	fi
 
 	if ! grep -q 'apps/web/dist' "$DAED_MAKEFILE"; then
-		echo "ERROR: Daed Makefile does not contain apps/web/dist."
+		echo "ERROR: Daed Makefile does not contain the apps/web/dist output path."
 		exit 1
 	fi
 
-	# 原命令只会构建名为 daed 的工作区，当前 snapshot 不会生成 Web UI。
-	# 直接构建 apps/web，确保前端产物会进入 apps/web/dist。
+	# 上游源码包自带 wing 目录；删除后才能克隆指定 dae-wing 提交。
 	sed -i \
-		's|pnpm build --filter daed|pnpm --dir apps/web run build; test -d apps/web/dist; test -n "$$(find apps/web/dist -type f -print -quit)"|' \
+		's|git clone https://github.com/daeuniverse/dae-wing $(PKG_BUILD_DIR) &&|rm -rf $(PKG_BUILD_DIR) ; git clone https://github.com/daeuniverse/dae-wing $(PKG_BUILD_DIR) &&|' \
 		"$DAED_MAKEFILE"
 
-	# Build/Prepare 原先没有 set -e；即使 cp 找不到 dist 文件，构建仍会继续。
-	# 添加后，前端构建、复制或文件检查失败都会立即终止 Actions。
+	# CI 环境默认要求锁文件完全一致，但当前 daed snapshot 的 pnpm-lock.yaml 已过期。
+	sed -i \
+		's|pnpm install ;|pnpm install --no-frozen-lockfile ;|' \
+		"$DAED_MAKEFILE"
+
+	# 只构建 daed workspace 不会产出 apps/web/dist。
+	# 直接构建 Web workspace，并在继续前确认存在前端文件。
+	# 此处故意不使用 $()，避免被 OpenWrt Make 当成变量再次展开。
+	sed -i \
+		's|pnpm build --filter daed ;|pnpm --dir apps/web run build ; test -d apps/web/dist ; find apps/web/dist -type f -print -quit | grep -q . ;|' \
+		"$DAED_MAKEFILE"
+
+	# 原 Build/Prepare 未启用 set -e；前端失败时可能仍继续编译空目录。
 	sed -i \
 		'/^define Build\/Prepare$/,/^endef$/ s/^[[:space:]]*( \\$/\t( set -e; \\/' \
 		"$DAED_MAKEFILE"
 
+	if ! grep -q 'pnpm install --no-frozen-lockfile' "$DAED_MAKEFILE"; then
+		echo "ERROR: Failed to allow the outdated pnpm lockfile."
+		exit 1
+	fi
+
 	if ! grep -q 'pnpm --dir apps/web run build' "$DAED_MAKEFILE"; then
-		echo "ERROR: Failed to replace the Daed frontend build command."
+		echo "ERROR: Failed to configure the Daed Web UI build command."
+		exit 1
+	fi
+
+	if ! grep -q 'rm -rf $(PKG_BUILD_DIR) ; git clone https://github.com/daeuniverse/dae-wing' "$DAED_MAKEFILE"; then
+		echo "ERROR: Failed to fix the dae-wing clone directory conflict."
 		exit 1
 	fi
 
@@ -162,123 +183,8 @@ PATCH_DAED_MAKEFILE() {
 
 	echo "Daed Makefile patched successfully."
 	echo "Web UI embedding: enabled"
-	echo "Web UI build command: pnpm --dir apps/web run build"
-}
-
-UPDATE_VERSION() {
-	local PKG_NAME="$1"
-	local PKG_MARK="${2:-false}"
-	local PKG_FILES
-
-	PKG_FILES=$(find \
-		./ \
-		../feeds/packages/ \
-		-maxdepth 3 \
-		-type f \
-		-wholename "*/$PKG_NAME/Makefile" \
-		2>/dev/null || true)
-
-	if [ -z "$PKG_FILES" ]; then
-		echo "$PKG_NAME not found!"
-		return 0
-	fi
-
-	echo
-	echo "$PKG_NAME version update has started!"
-
-	while IFS= read -r PKG_FILE; do
-		[ -n "$PKG_FILE" ] || continue
-
-		local PKG_REPO
-		local PKG_TAG
-		local OLD_VER
-		local OLD_URL
-		local OLD_FILE
-		local OLD_HASH
-		local PKG_URL
-		local NEW_VER
-		local NEW_URL
-		local NEW_HASH
-
-		PKG_REPO=$(grep -Po \
-			'PKG_SOURCE_URL:=https://.*github.com/\K[^/]+/[^/]+' \
-			"$PKG_FILE" || true)
-
-		if [ -z "$PKG_REPO" ]; then
-			echo "Cannot determine GitHub repository: $PKG_FILE"
-			continue
-		fi
-
-		PKG_TAG=$(curl -fsSL \
-			"https://api.github.com/repos/$PKG_REPO/releases" |
-			jq -r \
-				"map(select(.prerelease == $PKG_MARK)) | first | .tag_name" \
-			2>/dev/null || true)
-
-		if [ -z "$PKG_TAG" ] || [ "$PKG_TAG" = "null" ]; then
-			echo "No release found: $PKG_REPO"
-			continue
-		fi
-
-		OLD_VER=$(grep -Po 'PKG_VERSION:=\K.*' "$PKG_FILE" || true)
-		OLD_URL=$(grep -Po 'PKG_SOURCE_URL:=\K.*' "$PKG_FILE" || true)
-		OLD_FILE=$(grep -Po 'PKG_SOURCE:=\K.*' "$PKG_FILE" || true)
-		OLD_HASH=$(grep -Po 'PKG_HASH:=\K.*' "$PKG_FILE" || true)
-
-		if [ -z "$OLD_VER" ] || [ -z "$OLD_URL" ]; then
-			echo "Incomplete package metadata: $PKG_FILE"
-			continue
-		fi
-
-		if [[ "$OLD_URL" == *"releases"* ]]; then
-			PKG_URL="${OLD_URL%/}/$OLD_FILE"
-		else
-			PKG_URL="${OLD_URL%/}"
-		fi
-
-		NEW_VER=$(echo "$PKG_TAG" |
-			sed -E 's/[^0-9]+/\./g; s/^\.|\.$//g')
-
-		NEW_URL=$(echo "$PKG_URL" |
-			sed \
-				-e "s/\$(PKG_VERSION)/$NEW_VER/g" \
-				-e "s/\$(PKG_NAME)/$PKG_NAME/g")
-
-		if [ -z "$NEW_URL" ]; then
-			echo "Cannot determine source URL: $PKG_FILE"
-			continue
-		fi
-
-		NEW_HASH=$(curl -fsSL "$NEW_URL" |
-			sha256sum |
-			cut -d ' ' -f 1 || true)
-
-		if [ -z "$NEW_HASH" ]; then
-			echo "Cannot download new source: $NEW_URL"
-			continue
-		fi
-
-		echo "old version: $OLD_VER $OLD_HASH"
-		echo "new version: $NEW_VER $NEW_HASH"
-
-		if [[ "$NEW_VER" =~ ^[0-9].* ]] &&
-			dpkg --compare-versions "$OLD_VER" lt "$NEW_VER"; then
-
-			sed -i \
-				"s/PKG_VERSION:=.*/PKG_VERSION:=$NEW_VER/g" \
-				"$PKG_FILE"
-
-			if grep -q '^PKG_HASH:=' "$PKG_FILE"; then
-				sed -i \
-					"s/PKG_HASH:=.*/PKG_HASH:=$NEW_HASH/g" \
-					"$PKG_FILE"
-			fi
-
-			echo "$PKG_FILE version has been updated!"
-		else
-			echo "$PKG_FILE version is already the latest!"
-		fi
-	done <<< "$PKG_FILES"
+	echo "Web UI build: apps/web"
+	echo "PNPM lockfile mode: no-frozen-lockfile"
 }
 
 # 删除可能冲突的官方软件包。
@@ -314,8 +220,7 @@ UPDATE_PACKAGE \
 	"lucky" \
 	"true"
 
-# GecoosAC 上游仓库不可匿名访问，因此不再下载。
-# Config/GENERAL.txt 中也已删除 CONFIG_PACKAGE_luci-app-gecoosac=y。
+# GecoosAC 上游仓库无法匿名访问，已从 GENERAL.txt 移除，不再下载。
 
 # Glass 是必需主题。
 UPDATE_PACKAGE \
