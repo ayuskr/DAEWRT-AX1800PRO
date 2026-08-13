@@ -24,7 +24,12 @@ UPDATE_PACKAGE() {
 	echo
 	echo "Preparing package: $PKG_NAME"
 
-	if ! git ls-remote --exit-code --heads "$REPO_URL" "$PKG_BRANCH" >/dev/null 2>&1; then
+	if ! git ls-remote \
+		--exit-code \
+		--heads \
+		"$REPO_URL" \
+		"$PKG_BRANCH" >/dev/null 2>&1; then
+
 		if [ "$PKG_REQUIRED" = "true" ]; then
 			echo "ERROR: Required repository or branch is unavailable."
 			echo "Repository: $REPO_URL"
@@ -110,6 +115,7 @@ UPDATE_PACKAGE() {
 
 PATCH_DAED_MAKEFILE() {
 	local DAED_MAKEFILE="./luci-app-daed/daed/Makefile"
+	local PREPARE_BLOCK
 
 	if [ ! -f "$DAED_MAKEFILE" ]; then
 		echo "ERROR: Daed Makefile not found:"
@@ -123,68 +129,100 @@ PATCH_DAED_MAKEFILE() {
 		exit 1
 	fi
 
-	if ! grep -q 'pnpm install' "$DAED_MAKEFILE"; then
-		echo "ERROR: Daed Makefile does not contain pnpm install."
+	if ! grep -q 'git clone https://github.com/daeuniverse/dae-wing $(PKG_BUILD_DIR)' \
+		"$DAED_MAKEFILE"; then
+		echo "ERROR: Expected dae-wing clone command was not found."
 		exit 1
 	fi
 
-	if ! grep -q 'pnpm build --filter daed' "$DAED_MAKEFILE"; then
-		echo "ERROR: Daed Makefile does not contain the expected frontend build command."
-		echo "Expected: pnpm build --filter daed"
+	if ! grep -q 'pnpm install ;' "$DAED_MAKEFILE"; then
+		echo "ERROR: Expected pnpm install command was not found."
+		exit 1
+	fi
+
+	if ! grep -q 'pnpm build --filter daed ;' "$DAED_MAKEFILE"; then
+		echo "ERROR: Expected Daed frontend build command was not found."
+		echo "Expected: pnpm build --filter daed ;"
 		exit 1
 	fi
 
 	if ! grep -q 'apps/web/dist' "$DAED_MAKEFILE"; then
-		echo "ERROR: Daed Makefile does not contain the apps/web/dist output path."
+		echo "ERROR: Daed Makefile does not contain apps/web/dist."
 		exit 1
 	fi
 
-	# 上游源码包自带 wing 目录；删除后才能克隆指定 dae-wing 提交。
+	# daed 源码包中可能已存在 wing 目录。克隆 dae-wing 前先删除，
+	# 防止 git clone 因目标目录非空而失败。
 	sed -i \
-		's|git clone https://github.com/daeuniverse/dae-wing $(PKG_BUILD_DIR) &&|rm -rf $(PKG_BUILD_DIR) ; git clone https://github.com/daeuniverse/dae-wing $(PKG_BUILD_DIR) &&|' \
+		's@			git clone https://github.com/daeuniverse/dae-wing $(PKG_BUILD_DIR) && \\@			rm -rf $(PKG_BUILD_DIR) ; \\@' \
 		"$DAED_MAKEFILE"
 
-	# CI 环境默认要求锁文件完全一致，但当前 daed snapshot 的 pnpm-lock.yaml 已过期。
 	sed -i \
-		's|pnpm install ;|pnpm install --no-frozen-lockfile ;|' \
+		'/^[[:space:]]*rm -rf $(PKG_BUILD_DIR) ; \\$/a\
+			git clone https://github.com/daeuniverse/dae-wing $(PKG_BUILD_DIR) \&\& \\' \
 		"$DAED_MAKEFILE"
 
-	# 只构建 daed workspace 不会产出 apps/web/dist。
-	# 直接构建 Web workspace，并在继续前确认存在前端文件。
-	# 此处故意不使用 $()，避免被 OpenWrt Make 当成变量再次展开。
+	# GitHub Actions 中 pnpm 默认启用 frozen-lockfile。
+	# 当前 snapshot 的 package.json 与 pnpm-lock.yaml 不完全一致，
+	# 因此允许 pnpm 更新锁文件后安装依赖。
 	sed -i \
-		's|pnpm build --filter daed ;|pnpm --dir apps/web run build ; test -d apps/web/dist ; find apps/web/dist -type f -print -quit | grep -q . ;|' \
+		's@			pnpm install ; \\@			pnpm install --no-frozen-lockfile ; \\@' \
 		"$DAED_MAKEFILE"
 
-	# 原 Build/Prepare 未启用 set -e；前端失败时可能仍继续编译空目录。
+	# 保留上游 workspace 构建命令，在构建结束后检查实际前端产物。
+	# 不使用 shell 的 $()，避免被 OpenWrt Make 提前展开。
 	sed -i \
-		'/^define Build\/Prepare$/,/^endef$/ s/^[[:space:]]*( \\$/\t( set -e; \\/' \
+		's@			pnpm build --filter daed ; \\@			pnpm build --filter daed ; \\\
+			test -d apps/web/dist ; \\\
+			find apps/web/dist -type f -print -quit | grep -q . ; \\@' \
 		"$DAED_MAKEFILE"
 
-	if ! grep -q 'pnpm install --no-frozen-lockfile' "$DAED_MAKEFILE"; then
-		echo "ERROR: Failed to allow the outdated pnpm lockfile."
+	# Build/Prepare 中任意命令失败时立即停止。
+	sed -i \
+		'/^define Build\/Prepare$/,/^endef$/ s/^[[:space:]]*( \\$/	( set -e; \\/' \
+		"$DAED_MAKEFILE"
+
+	PREPARE_BLOCK=$(sed -n \
+		'/^define Build\/Prepare$/,/^endef$/p' \
+		"$DAED_MAKEFILE")
+
+	if ! grep -q 'rm -rf $(PKG_BUILD_DIR)' <<< "$PREPARE_BLOCK"; then
+		echo "ERROR: Failed to add dae-wing directory cleanup."
 		exit 1
 	fi
 
-	if ! grep -q 'pnpm --dir apps/web run build' "$DAED_MAKEFILE"; then
-		echo "ERROR: Failed to configure the Daed Web UI build command."
+	if ! grep -q 'git clone https://github.com/daeuniverse/dae-wing $(PKG_BUILD_DIR)' \
+		<<< "$PREPARE_BLOCK"; then
+		echo "ERROR: The dae-wing clone command was lost while patching."
 		exit 1
 	fi
 
-	if ! grep -q 'rm -rf $(PKG_BUILD_DIR) ; git clone https://github.com/daeuniverse/dae-wing' "$DAED_MAKEFILE"; then
-		echo "ERROR: Failed to fix the dae-wing clone directory conflict."
+	if ! grep -q 'pnpm install --no-frozen-lockfile' <<< "$PREPARE_BLOCK"; then
+		echo "ERROR: Failed to disable pnpm frozen-lockfile mode."
 		exit 1
 	fi
 
-	if ! sed -n '/^define Build\/Prepare$/,/^endef$/p' "$DAED_MAKEFILE" | grep -q 'set -e;'; then
-		echo "ERROR: Failed to enable error checking in Daed Build/Prepare."
+	if ! grep -q 'pnpm build --filter daed' <<< "$PREPARE_BLOCK"; then
+		echo "ERROR: The Daed frontend build command was lost while patching."
+		exit 1
+	fi
+
+	if ! grep -q 'find apps/web/dist -type f -print -quit | grep -q .' \
+		<<< "$PREPARE_BLOCK"; then
+		echo "ERROR: Failed to add the Daed frontend output check."
+		exit 1
+	fi
+
+	if ! grep -q 'set -e;' <<< "$PREPARE_BLOCK"; then
+		echo "ERROR: Failed to enable error checking in Build/Prepare."
 		exit 1
 	fi
 
 	echo "Daed Makefile patched successfully."
 	echo "Web UI embedding: enabled"
-	echo "Web UI build: apps/web"
+	echo "Frontend build command: pnpm build --filter daed"
 	echo "PNPM lockfile mode: no-frozen-lockfile"
+	echo "Frontend output check: enabled"
 }
 
 # 删除可能冲突的官方软件包。
@@ -220,7 +258,8 @@ UPDATE_PACKAGE \
 	"lucky" \
 	"true"
 
-# GecoosAC 上游仓库无法匿名访问，已从 GENERAL.txt 移除，不再下载。
+# GecoosAC 上游仓库当前不可匿名访问。
+# Config/GENERAL.txt 已移除 luci-app-gecoosac，因此这里不再下载。
 
 # Glass 是必需主题。
 UPDATE_PACKAGE \
